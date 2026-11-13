@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import { DataNotice } from "@/components/shared/data-notice";
 import {
   EmptyState,
@@ -35,7 +36,7 @@ import { where } from "firebase/firestore";
 import { useState } from "react";
 const selectStyle = "h-10 rounded-md border bg-background px-3 text-sm";
 export function MaintenanceWorkspace() {
-  const { user, isAdmin } = useAuth();
+  const { user, userDoc, isAdmin } = useAuth();
   const { toast } = useToast();
   const { data, loading, error } = useCollectionRealtime<MaintenanceDoc>(
     "maintenance",
@@ -148,6 +149,15 @@ export function MaintenanceWorkspace() {
           {filtered.map((r) => (
             <Card key={r.id}>
               <CardContent className="p-5 space-y-3">
+                {!isAdmin && userDoc?.tenancyId && (
+                  <Button asChild variant="outline" size="sm">
+                    <Link
+                      to={`/t/messages?maintenance=${encodeURIComponent(r.id)}`}
+                    >
+                      Discuss with Owner
+                    </Link>
+                  </Button>
+                )}
                 <div className="flex flex-wrap justify-between gap-2">
                   <Badge variant="secondary" className="capitalize">
                     {r.status.replace("_", " ")}

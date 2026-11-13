@@ -19,6 +19,7 @@ import {
   LayoutDashboard,
   LogOut,
   Menu,
+  MessageSquare,
   Receipt,
   Settings,
   Shield,
@@ -30,6 +31,7 @@ import {
 import { Suspense, useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 const adminItems = [
+  { path: "/a/messages", icon: MessageSquare, label: "Messages" },
   { path: "/a", icon: LayoutDashboard, label: "Overview" },
   { path: "/a/occupancy", icon: Home, label: "Rooms & occupancy" },
   { path: "/a/documents", icon: FolderLock, label: "Document records" },
@@ -45,6 +47,7 @@ const adminItems = [
   { path: "/a/settings", icon: Settings, label: "Settings" },
 ];
 const tenantItems = [
+  { path: "/t/messages", icon: MessageSquare, label: "Messages" },
   { path: "/t", icon: Home, label: "Home" },
   { path: "/t/bills", icon: FileText, label: "Bills" },
   { path: "/t/history", icon: History, label: "History" },

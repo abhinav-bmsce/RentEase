@@ -74,3 +74,27 @@ Hosting deployment does not update Firestore rules, indexes or records. Review d
 ## Privacy
 
 Environment files, credentials, uploaded documents, local records, dependencies and build outputs are excluded from version control. Portfolio screenshots containing real tenant information are intentionally omitted. Do not use production identity documents as test fixtures.
+
+## RentEase Connect
+
+Both portals include **Messages** for private, realtime text chat. Tenants choose **Chat with owner**; owners use **Message tenant** in the tenant directory or select an active tenancy and start a conversation. **Discuss with Owner** on a maintenance request carries its reference into messages. Messages display timestamps, sent/read receipts and per-conversation unread counts. History loads 40 messages at a time; older messages are fetched only on demand. There is no attachment storage, polling or paid backend service.
+
+One conversation uses the tenancy ID as its document ID. Transactions prevent duplicate creation and keep message ordering/counters atomic. Retry IDs prevent duplicate sends after uncertain responses. The message body is plain React text, limited to 2,000 characters. No typing/presence writes are generated. The conversation list subscribes only while Messages is open, for the signed-in participant (maximum 100 conversations); only the selected thread has a live message subscription. Read markers advance only after the latest messages load in a visible page. Firestore's normal Spark read/write quotas still apply; this is not server-enforced rate limiting.
+
+### Owner assignment and privacy
+
+`properties/{propertyId}.ownerUid` identifies an explicitly assigned owner. Legacy properties resolve to `settings/general.bootstrapUid`, the owner created by initial setup. If neither is available, chat is blocked instead of selecting an arbitrary administrator. Existing owner-management authority is preserved; trusted administrators manage tenancy/property assignments. Chat does not give unrelated administrators access to conversations.
+
+Conversation participants and tenancy IDs are immutable. Active accounts can read their original private history after a lease ends, but cannot send without an active matching tenancy and current assigned owner. Reassigning ownership locks the old conversation for sending; transferring historical chat to a new owner is deliberately unsupported and requires a separate, reviewed migration. Disabled accounts cannot read chat. Only the sender can create a message, and messages cannot be edited or deleted by clients. Maintenance references must match the tenant and room. Tenant profiles are not made public to enable chat.
+
+### Activation and checks
+
+The Connect rules and Hosting build were deployed to `rentease-3f04f` on 14 November 2026 after explicit owner approval. For another environment, review and deploy the `/conversations/{tenancyId}` and nested `/messages/{messageId}` rules before using chat. The UI reports unavailable access if the rules are missing.
+
+```bash
+npm run test:chat:rules  # local Firebase emulator; Java and Firebase CLI required
+npm run test:run
+npm run build
+```
+
+See `docs/CONNECT_RULES_REVIEW.md` for the rule review. Future rules/Hosting deployments and GitHub pushes require the repository owner's approval.

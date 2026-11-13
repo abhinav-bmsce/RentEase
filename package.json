@@ -12,7 +12,8 @@
     "lint": "eslint .",
     "init:admin": "vite-node scripts/init-admin.ts",
     "typecheck": "tsc -b",
-    "test:rules": "firebase emulators:exec --only firestore --project demo-rentease --config firebase.emulators.json \"node scripts/test-rules.mjs\""
+    "test:rules": "firebase emulators:exec --only firestore --project demo-rentease --config firebase.emulators.json \"node scripts/test-rules.mjs\"",
+    "test:chat:rules": "firebase emulators:exec --only firestore --project demo-rentease --config firebase.emulators.json \"node scripts/test-chat-rules.mjs\""
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.0",

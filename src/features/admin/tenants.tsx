@@ -164,7 +164,16 @@ export function TenantManagement() {
                     </div>
                   </div>
 
-                  <div className="pt-2 border-t flex justify-end">
+                  <div className="pt-2 border-t flex flex-wrap gap-2 justify-end">
+                    {tenant.active && tenancy?.active && (
+                      <Button asChild variant="outline" size="sm">
+                        <Link
+                          to={`/a/messages?tenancy=${encodeURIComponent(tenancy.id)}`}
+                        >
+                          Message tenant
+                        </Link>
+                      </Button>
+                    )}
                     <Button asChild variant="outline" size="sm">
                       <Link to={`/a/tenants/${tenant.id}`}>
                         View Details

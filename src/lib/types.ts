@@ -22,6 +22,8 @@ export interface UserDoc {
 
 // ─── Property ────────────────────────────────────────────────────────────────
 export interface PropertyDoc {
+  /** Assigned owner; legacy properties use settings.general.bootstrapUid. */
+  ownerUid?: string;
   name: string;
   address: string;
   createdAt: Timestamp;

@@ -26,6 +26,7 @@ async function check(name, work) {
   console.log(`PASS ${name}`);
 }
 try {
+  await env.clearFirestore();
   await env.withSecurityRulesDisabled(async (context) => {
     const db = context.firestore();
     for (const [id, role, active, tenancyId] of [

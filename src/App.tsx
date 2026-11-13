@@ -133,6 +133,12 @@ const TenantSettings = lazy(() =>
   })),
 );
 
+const MessagesPage = lazy(() =>
+  import("@/features/workspace/messages").then((m) => ({
+    default: m.MessagesPage,
+  })),
+);
+
 function AppRoutes() {
   const { userDoc } = useAuth();
 
@@ -171,6 +177,7 @@ function AppRoutes() {
           <Route path="occupants" element={<OccupancyWorkspace />} />
           <Route path="maintenance" element={<MaintenanceWorkspace />} />
           <Route path="inspections" element={<InspectionWorkspace />} />
+          <Route path="messages" element={<MessagesPage />} />
           <Route path="notifications" element={<NotificationsPage />} />
           <Route path="settings" element={<TenantSettings />} />
         </Route>
@@ -199,6 +206,7 @@ function AppRoutes() {
           <Route path="documents" element={<DocumentWorkspace />} />
           <Route path="maintenance" element={<MaintenanceWorkspace />} />
           <Route path="inspections" element={<InspectionWorkspace />} />
+          <Route path="messages" element={<MessagesPage />} />
           <Route path="notifications" element={<NotificationsPage />} />
         </Route>
 

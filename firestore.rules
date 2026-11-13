@@ -153,6 +153,86 @@ service cloud.firestore {
         && request.resource.data.updatedAt == request.time;
     }
 
+    // RentEase Connect: one immutable participant pair per tenancy.
+    function chatOwner(leaseId) {
+      let lease = get(/databases/$(database)/documents/tenancies/$(leaseId)).data;
+      let room = get(/databases/$(database)/documents/rooms/$(lease.roomId)).data;
+      let property = get(/databases/$(database)/documents/properties/$(room.propertyId)).data;
+      return property.get('ownerUid', get(/databases/$(database)/documents/settings/general).data.get('bootstrapUid', ''));
+    }
+    function chatLease(leaseId, tenantUid, ownerUid) {
+      let lease = get(/databases/$(database)/documents/tenancies/$(leaseId)).data;
+      let tenant = get(/databases/$(database)/documents/users/$(tenantUid)).data;
+      let owner = get(/databases/$(database)/documents/users/$(ownerUid)).data;
+      return lease.active == true && lease.tenantUid == tenantUid
+        && tenant.active == true && tenant.role == 'tenant' && tenant.tenancyId == leaseId
+        && owner.active == true && owner.role == 'admin' && ownerUid == chatOwner(leaseId);
+    }
+    function chatParticipant(c) {
+      return isAuthenticated() && getUserData().active == true
+        && ((isTenant() && c.tenantUid == request.auth.uid) || (isAdmin() && c.ownerUid == request.auth.uid));
+    }
+    match /conversations/{conversationId} {
+      // Permit a participant to check a deterministic, not-yet-created conversation.
+      allow get: if (resource != null && chatParticipant(resource.data))
+        || (resource == null && isAuthenticated()
+          && (request.auth.uid == get(/databases/$(database)/documents/tenancies/$(conversationId)).data.tenantUid || request.auth.uid == chatOwner(conversationId))
+          && getUserData().active == true);
+      allow list: if chatParticipant(resource.data) && request.query.limit <= 100;
+      allow create: if chatParticipant(request.resource.data)
+        && request.resource.data.keys().hasOnly(['tenantUid','ownerUid','tenancyId','tenantName','seq','tenantSent','ownerSent','tenantRead','ownerRead','createdAt','updatedAt'])
+        && request.resource.data.tenancyId == conversationId
+        && chatLease(conversationId,request.resource.data.tenantUid,request.resource.data.ownerUid)
+        && request.resource.data.tenantName == get(/databases/$(database)/documents/users/$(request.resource.data.tenantUid)).data.name
+        && request.resource.data.seq == 0 && request.resource.data.tenantSent == 0 && request.resource.data.ownerSent == 0
+        && request.resource.data.tenantRead == 0 && request.resource.data.ownerRead == 0
+        && request.resource.data.createdAt == request.time && request.resource.data.updatedAt == request.time;
+      allow update: if chatParticipant(resource.data) && (validChatRead() || validChatSend());
+      function validChatRead() {
+        let n = request.resource.data;
+        let c = resource.data;
+        return (request.auth.uid == c.tenantUid
+          && n.diff(c).affectedKeys().hasOnly(['tenantRead'])
+          && n.tenantRead is int && n.tenantRead >= c.tenantRead && n.tenantRead <= c.ownerSent)
+        || (request.auth.uid == c.ownerUid
+          && n.diff(c).affectedKeys().hasOnly(['ownerRead'])
+          && n.ownerRead is int && n.ownerRead >= c.ownerRead && n.ownerRead <= c.tenantSent);
+      }
+      function validChatSend() {
+        let n = request.resource.data;
+        let c = resource.data;
+        let m = getAfter(/databases/$(database)/documents/conversations/$(conversationId)/messages/$(n.lastMessageId)).data;
+        return chatLease(conversationId,c.tenantUid,c.ownerUid)
+          && n.diff(c).affectedKeys().hasOnly(['seq','tenantSent','ownerSent','lastMessageId','updatedAt'])
+          && n.seq == c.seq + 1 && n.updatedAt == request.time
+          && !exists(/databases/$(database)/documents/conversations/$(conversationId)/messages/$(n.lastMessageId))
+          && m.seq == n.seq && m.senderUid == request.auth.uid && m.createdAt == request.time
+          && ((request.auth.uid == c.tenantUid && n.tenantSent == c.tenantSent+1 && n.ownerSent == c.ownerSent && m.ordinal == n.tenantSent)
+            || (request.auth.uid == c.ownerUid && n.ownerSent == c.ownerSent+1 && n.tenantSent == c.tenantSent && m.ordinal == n.ownerSent));
+      }
+      match /messages/{messageId} {
+        function conversation() { return get(/databases/$(database)/documents/conversations/$(conversationId)).data; }
+        allow get: if chatParticipant(conversation());
+        allow list: if chatParticipant(conversation()) && request.query.limit <= 40;
+        allow create: if chatParticipant(conversation()) && validMessage();
+        function validMessage() {
+          let c = conversation();
+          let n = getAfter(/databases/$(database)/documents/conversations/$(conversationId)).data;
+          let m = request.resource.data;
+          return chatLease(conversationId,c.tenantUid,c.ownerUid)
+            && m.keys().hasOnly(['senderUid','text','seq','ordinal','maintenanceId','createdAt'])
+            && m.senderUid == request.auth.uid && m.createdAt == request.time
+            && m.text is string && m.text.size() > 0 && m.text.size() <= 2000 && m.text.matches('(?s).*[^\\s].*')
+            && m.seq == c.seq+1 && n.seq == m.seq && n.lastMessageId == messageId
+            && m.ordinal == (request.auth.uid == c.tenantUid ? n.tenantSent : n.ownerSent)
+            && m.maintenanceId is string && m.maintenanceId.size() <= 128
+            && (m.maintenanceId == '' || (
+              get(/databases/$(database)/documents/maintenance/$(m.maintenanceId)).data.tenantUid == c.tenantUid
+              && get(/databases/$(database)/documents/maintenance/$(m.maintenanceId)).data.roomId == get(/databases/$(database)/documents/tenancies/$(conversationId)).data.roomId));
+        }
+      }
+    }
+
     // ─── Audit Logs Collection ──────────────────────────────────────
     match /audit_logs/{logId} {
       allow read, write: if isAdmin();

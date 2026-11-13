@@ -1,0 +1,162 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && getUserData().role == 'admin' && getUserData().active == true;
+    }
+
+    function isTenant() {
+      return isAuthenticated() && getUserData().role == 'tenant' && getUserData().active == true;
+    }
+
+    function isOwner(uid) {
+      return isAuthenticated() && request.auth.uid == uid;
+    }
+
+    function isFirstTimeSetup() {
+      return !exists(/databases/$(database)/documents/settings/general);
+    }
+
+    // ─── Users Collection ───────────────────────────────────────────
+    match /users/{userId} {
+      // Admin has full control
+      allow read, write: if isAdmin();
+      // Tenant can read their own document
+      allow read: if isOwner(userId);
+      // One-time initial admin creation if the system is not yet initialized
+      allow create: if isOwner(userId)
+                    && isFirstTimeSetup()
+                    && request.resource.data.role == 'admin'
+                    && request.resource.data.active == true
+                    && request.resource.data.mustChangePassword == false
+                    && getAfter(/databases/$(database)/documents/settings/general).data.bootstrapUid == request.auth.uid;
+      // Tenant can only update mustChangePassword and updatedAt on their own doc
+      allow update: if isOwner(userId)
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['mustChangePassword', 'updatedAt'])
+                    && request.resource.data.mustChangePassword == false;
+    }
+
+    // ─── Properties Collection ──────────────────────────────────────
+    match /properties/{propertyId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    // ─── Rooms Collection ───────────────────────────────────────────
+    match /rooms/{roomId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    // ─── Tenancies Collection ───────────────────────────────────────
+    match /tenancies/{tenancyId} {
+      allow read: if isAdmin() || (isTenant() && resource.data.tenantUid == request.auth.uid);
+      allow write: if isAdmin();
+    }
+
+    // ─── Bills Collection ───────────────────────────────────────────
+    match /bills/{billId} {
+      allow read: if isAdmin() || (isTenant() && resource.data.tenantUid == request.auth.uid);
+      allow create, delete: if isAdmin();
+      // Admin can update anything; tenant can only transition to 'submitted' upon payment submission
+      // Tenants cannot alter amounts, line items, roomId, month, paidAmount, or dueDate
+      allow update: if isAdmin()
+                    || (isTenant()
+                        && resource.data.tenantUid == request.auth.uid
+                        && (resource.data.status == 'unpaid' || resource.data.status == 'overdue')
+                        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
+                        && request.resource.data.status == 'submitted');
+    }
+
+    // ─── Payments Collection ────────────────────────────────────────
+    match /payments/{paymentId} {
+      allow read: if isAdmin() || (isTenant() && resource.data.tenantUid == request.auth.uid);
+      // Tenant can only submit payments in 'pending' status for their own account
+      // Validates ownership, positive amount, valid UTR size, and safe Base64 image payload
+      allow create: if isTenant()
+                    && request.resource.data.tenantUid == request.auth.uid
+                    && request.resource.data.status == 'pending'
+                    && request.resource.data.amount > 0
+                    && request.resource.data.utr is string
+                    && request.resource.data.utr.size() >= 6
+                    && request.resource.data.utr.size() <= 40
+                    && request.resource.data.proofUrl is string
+                    && request.resource.data.proofUrl.size() > 0
+                    && request.resource.data.proofUrl.size() <= 600000
+                    && request.resource.data.proofUrl.matches('^data:image/(jpeg|png|webp);base64,.*');
+      // Strictly restrict approval, rejection, edits and deletion to verified administrators
+      allow update, delete: if isAdmin();
+    }
+
+    // ─── Notifications Collection ───────────────────────────────────
+    match /notifications/{notificationId} {
+      allow read: if isAdmin() || (isTenant() && resource.data.tenantUid == request.auth.uid);
+      allow create, delete: if isAdmin();
+      // Tenant can mark their own notifications as read
+      allow update: if (isTenant() && resource.data.tenantUid == request.auth.uid
+                        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']))
+                    || isAdmin();
+    }
+
+    // ─── Settings Collection ────────────────────────────────────────
+    match /settings/{settingId} {
+      allow read: if true;
+      allow create: if isAdmin() || (isAuthenticated() && isFirstTimeSetup()
+                    && settingId == 'general'
+                    && request.resource.data.bootstrapUid == request.auth.uid
+                    && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin');
+      allow update, delete: if isAdmin();
+    }
+
+    function validMaintenanceStage(old, next) {
+      return next == old
+        || (old == 'submitted' && next == 'acknowledged')
+        || (old == 'acknowledged' && next == 'assigned')
+        || (old == 'assigned' && next == 'in_progress')
+        || (old == 'in_progress' && next == 'resolved')
+        || (old == 'resolved' && next == 'closed');
+    }
+    match /maintenance/{requestId} {
+      allow read: if isAdmin() || (isTenant() && resource.data.tenantUid == request.auth.uid);
+      allow create: if isTenant()
+        && request.resource.data.keys().hasOnly(['tenantUid','roomId','propertyId','category','description','repairNeeded','priority','photoUrl','status','assignee','cost','createdAt','updatedAt'])
+        && request.resource.data.tenantUid == request.auth.uid
+        && get(/databases/$(database)/documents/tenancies/$(getUserData().tenancyId)).data.tenantUid == request.auth.uid
+        && get(/databases/$(database)/documents/tenancies/$(getUserData().tenancyId)).data.active == true
+        && request.resource.data.roomId == get(/databases/$(database)/documents/tenancies/$(getUserData().tenancyId)).data.roomId
+        && request.resource.data.propertyId == get(/databases/$(database)/documents/rooms/$(request.resource.data.roomId)).data.propertyId
+        && request.resource.data.category in ['plumbing','electrical','appliances','furniture','doors_windows','other']
+        && request.resource.data.priority in ['low','normal','urgent']
+        && request.resource.data.description is string && request.resource.data.description.size() >= 10 && request.resource.data.description.size() <= 2000
+        && request.resource.data.repairNeeded is string && request.resource.data.repairNeeded.size() >= 3 && request.resource.data.repairNeeded.size() <= 1000
+        && request.resource.data.photoUrl is string && request.resource.data.photoUrl.size() <= 300000
+        && (request.resource.data.photoUrl == '' || request.resource.data.photoUrl.matches('^data:image/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$'))
+        && request.resource.data.status == 'submitted' && request.resource.data.assignee == '' && request.resource.data.cost == 0
+        && request.resource.data.createdAt == request.time && request.resource.data.updatedAt == request.time;
+      allow update: if isAdmin()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','assignee','cost','updatedAt'])
+        && validMaintenanceStage(resource.data.status, request.resource.data.status)
+        && request.resource.data.assignee is string && request.resource.data.assignee.size() <= 100
+        && (!(request.resource.data.status in ['assigned','in_progress','resolved','closed']) || request.resource.data.assignee.size() > 0)
+        && request.resource.data.cost is int && request.resource.data.cost >= 0
+        && request.resource.data.updatedAt == request.time;
+    }
+
+    // ─── Audit Logs Collection ──────────────────────────────────────
+    match /audit_logs/{logId} {
+      allow read, write: if isAdmin();
+    }
+  }
+}
+

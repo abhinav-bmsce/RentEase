@@ -1,3 +1,4 @@
+import { loadChatContacts, type ChatContact } from "@/services/chat-contacts";
 import { useEffect, useRef, useState } from "react";
 import { useSearchParams, Link } from "react-router-dom";
 import {
@@ -49,33 +50,102 @@ export function MessagesPage() {
     ],
     Boolean(user),
   );
-  const { data: leases } = useCollectionRealtime<TenancyDoc>(
+  const {
+    data: leases,
+    loading: leasesLoading,
+    error: leasesError,
+  } = useCollectionRealtime<TenancyDoc>(
     "tenancies",
-    [where("active", "==", true)],
-    isAdmin,
+    isAdmin
+      ? [where("active", "==", true)]
+      : [where("tenantUid", "==", user?.uid || "")],
+    Boolean(user),
   );
-  const [problem, setProblem] = useState(""),
-    [opening, setOpening] = useState(false);
-  const [selectedLease, setSelectedLease] = useState(
-    params.get("tenancy") || "",
-  );
+  const [contacts, setContacts] = useState<ChatContact[]>([]);
+  const [contactsLoading, setContactsLoading] = useState(true);
+  const [problem, setProblem] = useState("");
+  const [opening, setOpening] = useState(false);
+  const attempted = useRef("");
+  useEffect(() => {
+    if (!user || leasesLoading) return;
+    let cancelled = false;
+    setContactsLoading(true);
+    loadChatContacts(user.uid, isAdmin, leases)
+      .then((result) => {
+        if (!cancelled) setContacts(result);
+      })
+      .catch(() => {
+        if (!cancelled)
+          setProblem(
+            "Could not load tenant names and room details. Please reload to retry.",
+          );
+      })
+      .finally(() => {
+        if (!cancelled) setContactsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [user, isAdmin, leases, leasesLoading]);
   async function open(lease: string) {
-    if (!lease) return;
+    if (!lease || opening) return;
     setOpening(true);
     setProblem("");
+    setParams({
+      conversation: lease,
+      ...(maintenanceId ? { maintenance: maintenanceId } : {}),
+    });
     try {
-      const conversation = await openConversation(lease);
-      setParams({
-        conversation,
-        ...(maintenanceId ? { maintenance: maintenanceId } : {}),
-      });
+      await openConversation(lease);
     } catch (e) {
       setProblem((e as Error).message);
     } finally {
       setOpening(false);
     }
   }
+  const requested =
+    params.get("tenancy") || (!isAdmin ? userDoc?.tenancyId : "") || "";
+  useEffect(() => {
+    if (
+      id ||
+      !requested ||
+      contactsLoading ||
+      !contacts.some((c) => c.id === requested) ||
+      attempted.current === requested
+    )
+      return;
+    attempted.current = requested;
+    setOpening(true);
+    setProblem("");
+    setParams(
+      {
+        conversation: requested,
+        ...(maintenanceId ? { maintenance: maintenanceId } : {}),
+      },
+      { replace: true },
+    );
+    openConversation(requested)
+      .catch((e) => setProblem((e as Error).message))
+      .finally(() => setOpening(false));
+  }, [id, requested, contacts, contactsLoading, maintenanceId, setParams]);
   const current = conversations.find((c) => c.id === id);
+  const entries = [
+    ...new Set([
+      ...contacts.map((c) => c.id),
+      ...conversations.map((c) => c.id),
+    ]),
+  ]
+    .map((key) => ({
+      id: key,
+      contact: contacts.find((c) => c.id === key),
+      conversation: conversations.find((c) => c.id === key),
+    }))
+    .sort(
+      (a, b) =>
+        (b.conversation?.updatedAt?.seconds || 0) -
+        (a.conversation?.updatedAt?.seconds || 0),
+    );
+  const currentContact = contacts.find((c) => c.id === id);
   return (
     <div className="space-y-5">
       <PageHeader
@@ -88,38 +158,23 @@ export function MessagesPage() {
           {problem}
         </p>
       )}
-      <div className="flex flex-wrap gap-2">
-        {isAdmin && (
-          <select
-            aria-label="Active tenancy"
-            className="border rounded-md bg-background p-2 max-w-full"
-            value={selectedLease}
-            onChange={(e) => setSelectedLease(e.target.value)}
-          >
-            <option value="">Select an active tenancy</option>
-            {leases.map((l) => (
-              <option key={l.id} value={l.id}>
-                {conversations.find((c) => c.id === l.id)?.tenantName ||
-                  `Room ${l.roomId}`}{" "}
-                · {l.id.slice(0, 8)}
-              </option>
-            ))}
-          </select>
-        )}
+      {leasesError && <DataNotice error={leasesError} />}
+      <p className="text-sm text-muted-foreground">
+        Messaging is automatically available for active assigned tenancies.{" "}
+        {isAdmin
+          ? "Select a tenant below to chat."
+          : "Your assigned owner’s chat opens automatically."}
+      </p>
+      {problem && id && (
         <Button
-          disabled={opening || (isAdmin ? !selectedLease : !userDoc?.tenancyId)}
-          onClick={() =>
-            void open(isAdmin ? selectedLease : userDoc?.tenancyId || "")
-          }
+          variant="outline"
+          disabled={opening}
+          onClick={() => void open(id)}
         >
-          {opening
-            ? "Opening…"
-            : isAdmin
-              ? "Start conversation"
-              : "Chat with owner"}
+          Retry opening chat
         </Button>
-      </div>
-      {loading ? (
+      )}
+      {loading || leasesLoading || contactsLoading ? (
         <PageSkeleton />
       ) : (
         <div className="grid md:grid-cols-[240px_minmax(0,1fr)] border rounded-xl bg-card overflow-hidden">
@@ -128,43 +183,47 @@ export function MessagesPage() {
             className={`${id ? "hidden md:block" : ""} border-b md:border-b-0 md:border-r p-3 space-y-2 max-h-[65dvh] overflow-y-auto`}
           >
             <p className="text-xs text-muted-foreground px-2 py-1">MESSAGES</p>
-            {!conversations.length && (
+            {!entries.length && (
               <p className="text-sm p-2 text-muted-foreground">
-                No conversations yet. Start one above.
+                No active assigned tenants or previous conversations are
+                available.
               </p>
             )}
-            {[...conversations]
-              .sort(
-                (a, b) =>
-                  (b.updatedAt?.seconds || 0) - (a.updatedAt?.seconds || 0),
-              )
-              .map((c) => (
-                <button
-                  key={c.id}
-                  onClick={() => {
+            {entries.map(({ id: key, contact, conversation: c }) => (
+              <button
+                key={key}
+                disabled={opening}
+                onClick={() => {
+                  if (c) {
                     setProblem("");
-                    setParams({ conversation: c.id });
-                  }}
-                  aria-current={id === c.id ? "page" : undefined}
-                  className={`w-full text-left rounded-lg p-3 ${id === c.id ? "bg-primary/10" : "hover:bg-muted"}`}
-                >
-                  <span className="font-medium text-sm">
-                    {isAdmin ? c.tenantName : "Property owner"}
+                    setParams({ conversation: key });
+                  } else void open(key);
+                }}
+                aria-current={id === key ? "page" : undefined}
+                className={`w-full text-left rounded-lg p-3 ${id === key ? "bg-primary/10" : "hover:bg-muted"}`}
+              >
+                <span className="font-medium text-sm">
+                  {isAdmin
+                    ? contact?.name || c?.tenantName || "Tenant"
+                    : "Property owner"}
+                </span>
+                {c && unreadCount(c, !isAdmin) > 0 && (
+                  <span
+                    aria-label={`${unreadCount(c, !isAdmin)} unread`}
+                    className="float-right rounded-full bg-primary text-primary-foreground px-2 text-xs"
+                  >
+                    {unreadCount(c, !isAdmin)}
                   </span>
-                  {unreadCount(c, !isAdmin) > 0 && (
-                    <span
-                      aria-label={`${unreadCount(c, !isAdmin)} unread`}
-                      className="float-right rounded-full bg-primary text-primary-foreground px-2 text-xs"
-                    >
-                      {unreadCount(c, !isAdmin)}
-                    </span>
-                  )}
-                  <p className="text-xs text-muted-foreground mt-1">
-                    {c.updatedAt?.toDate().toLocaleDateString() ||
-                      "Just started"}
-                  </p>
-                </button>
-              ))}
+                )}
+                <p className="text-xs text-muted-foreground mt-1">
+                  {contact?.room || "Previous tenancy"}
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {c?.updatedAt?.toDate().toLocaleDateString() ||
+                    "Ready to message"}
+                </p>
+              </button>
+            ))}
             {conversations.length === 100 && (
               <p className="text-xs">Showing up to 100 conversations.</p>
             )}
@@ -174,9 +233,17 @@ export function MessagesPage() {
               <ChatThread
                 key={id}
                 conversation={current}
+                displayName={
+                  isAdmin
+                    ? currentContact?.name || current.tenantName
+                    : "Property owner"
+                }
+                roomName={currentContact?.room || "Previous tenancy"}
                 maintenanceId={maintenanceId}
                 onBack={() => setParams({})}
               />
+            ) : opening ? (
+              <PageSkeleton />
             ) : (
               <EmptyState
                 title={
@@ -184,7 +251,7 @@ export function MessagesPage() {
                 }
                 description={
                   id
-                    ? "Select an accessible conversation or start one for your active tenancy."
+                    ? "Select a tenant from the list to open their chat."
                     : "Select a conversation to read and send messages."
                 }
               />
@@ -198,10 +265,14 @@ export function MessagesPage() {
 function ChatThread({
   conversation: c,
   maintenanceId,
+  displayName,
+  roomName,
   onBack,
 }: {
   conversation: WithId<Conversation>;
   maintenanceId: string;
+  displayName: string;
+  roomName: string;
   onBack: () => void;
 }) {
   const { user, isAdmin } = useAuth();
@@ -349,11 +420,9 @@ function ChatThread({
           Back
         </Button>
         <div>
-          <h2 className="font-semibold">
-            {isAdmin ? c.tenantName : "Property owner"}
-          </h2>
+          <h2 className="font-semibold">{displayName}</h2>
           <p className="text-xs text-muted-foreground">
-            Private · Text messages
+            {roomName} · Private chat
           </p>
         </div>
       </header>

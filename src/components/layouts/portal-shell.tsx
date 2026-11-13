@@ -66,7 +66,7 @@ export function PortalShell({ kind }: { kind: "admin" | "tenant" }) {
   const [open, setOpen] = useState(false);
   const items = kind === "admin" ? adminItems : tenantItems;
   const current = [...items]
-    .reverse()
+    .sort((a, b) => b.path.length - a.path.length)
     .find(
       (item) => pathname === item.path || pathname.startsWith(item.path + "/"),
     );
